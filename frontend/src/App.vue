@@ -1,5 +1,5 @@
 <template>
-  <div class="page">
+  <div class="page" v-if="token">
     <header class="header glass-panel">
       <div class="header-content">
         <div class="logo">
@@ -35,14 +35,21 @@
           </button>
         </div>
 
-        <div class="header-stats" v-if="habits.length">
-          <div class="stat-pill">
-            <span class="stat-label">Active Habits</span>
-            <span class="stat-value">{{ habits.length }}</span>
+        <div class="header-stats-wrapper">
+          <div class="header-stats" v-if="habits.length">
+            <div class="stat-pill">
+              <span class="stat-label">Active Habits</span>
+              <span class="stat-value">{{ habits.length }}</span>
+            </div>
+            <div class="stat-pill">
+              <span class="stat-label">Completed Today</span>
+              <span class="stat-value success">{{ completedCount }}</span>
+            </div>
           </div>
-          <div class="stat-pill">
-            <span class="stat-label">Completed Today</span>
-            <span class="stat-value success">{{ completedCount }}</span>
+
+          <div class="user-profile-header">
+            <span class="user-email" :title="user?.email">👤 {{ user?.email?.split('@')[0] }}</span>
+            <button class="btn-logout" @click="handleLogout">Logout 🚪</button>
           </div>
         </div>
       </div>
@@ -150,6 +157,7 @@
       </div>
     </div>
   </div>
+  <AuthScreen v-else @auth-success="handleAuthSuccess" />
 </template>
 
 <script setup>
@@ -165,9 +173,41 @@ import AnalyticsWidget from './components/AnalyticsWidget.vue'
 import MonthCalendar from './components/MonthCalendar.vue'
 import CoachChat from './components/CoachChat.vue'
 import RemindersWidget from './components/RemindersWidget.vue'
+import AuthScreen from './components/AuthScreen.vue'
 
 const activeTab = ref('dashboard')
 const habits = ref([])
+
+// Authentication States
+const token = ref(localStorage.getItem('hm_token') || null)
+const user = ref(JSON.parse(localStorage.getItem('hm_user') || 'null'))
+
+function handleAuthSuccess({ user: loggedInUser, token: authToken }) {
+  token.value = authToken
+  user.value = loggedInUser
+  localStorage.setItem('hm_token', authToken)
+  localStorage.setItem('hm_user', JSON.stringify(loggedInUser))
+  
+  // Instantly fetch all personalized data upon login
+  fetchHabits()
+  fetchCoach()
+  fetchInsight()
+  fetchSuggestions()
+}
+
+function handleLogout() {
+  token.value = null
+  user.value = null
+  localStorage.removeItem('hm_token')
+  localStorage.removeItem('hm_user')
+  habits.value = []
+  suggestions.value = []
+  
+  if (reminderInterval) {
+    clearInterval(reminderInterval)
+    reminderInterval = null
+  }
+}
 const coachMessage = ref('')
 const coachLoading = ref(false)
 const weeklyInsight = ref(null)
@@ -406,22 +446,29 @@ function checkReminders() {
 
 // Watch selectedDate to fetch state correctly
 watch(selectedDate, async () => {
-  await fetchHabits()
-  fetchCoach()
-  fetchInsight()
+  if (token.value) {
+    await fetchHabits()
+    fetchCoach()
+    fetchInsight()
+  }
 })
 
 onMounted(async () => {
-  await fetchHabits()
-  fetchCoach()
-  fetchInsight()
-  fetchSuggestions()
-  
-  reminderInterval = setInterval(checkReminders, 30000)
+  if (token.value) {
+    await fetchHabits()
+    fetchCoach()
+    fetchInsight()
+    fetchSuggestions()
+    
+    reminderInterval = setInterval(checkReminders, 30000)
+  }
 })
 
 onUnmounted(() => {
-  if (reminderInterval) clearInterval(reminderInterval)
+  if (reminderInterval) {
+    clearInterval(reminderInterval)
+    reminderInterval = null
+  }
 })
 </script>
 
@@ -488,9 +535,59 @@ onUnmounted(() => {
   font-weight: 400;
 }
 
+.header-stats-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
 .header-stats {
   display: flex;
   gap: 1rem;
+}
+
+.user-profile-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  padding: 6px 12px;
+  border-radius: 10px;
+}
+
+.user-email {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-logout {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-logout:hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.35);
+  transform: translateY(-1px);
+}
+
+.btn-logout:active {
+  transform: translateY(0);
 }
 
 .stat-pill {

@@ -1,11 +1,5 @@
 const express = require('express')
 const router = express.Router()
-const { createClient } = require('@supabase/supabase-js')
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-)
 
 function normalizeSchedule(schedule) {
   if (!schedule || typeof schedule !== 'object') {
@@ -21,8 +15,8 @@ function normalizeSchedule(schedule) {
 function isScheduledOnDate(habit, dateStr) {
   const schedule = normalizeSchedule(habit.schedule)
   const date = new Date(dateStr)
-  const dayOfMonth = date.getDate()
-  const dayOfWeek = date.getDay() // 0 = Sunday, 1 = Monday
+  const dayOfMonth = date.getUTCDate()
+  const dayOfWeek = date.getUTCDay() // 0 = Sunday, 1 = Monday
 
   if (schedule.rule === 'Daily') return true
   if (schedule.rule === 'Even Days') return dayOfMonth % 2 === 0
@@ -47,9 +41,10 @@ router.get('/', async (req, res) => {
   try {
     const today = req.query.date || new Date().toISOString().split('T')[0]
 
-    const { data: habits, error } = await supabase
+    const { data: habits, error } = await req.supabase
       .from('habits')
       .select('*')
+      .eq('user_id', req.user.id)
       .order('created_at', { ascending: true })
 
     if (error) throw error
@@ -57,31 +52,33 @@ router.get('/', async (req, res) => {
     // For each habit, get today's completion and streak
     const enriched = await Promise.all(habits.map(async (habit) => {
       // Check today's completion
-      const { data: todayData } = await supabase
+      const { data: todayData } = await req.supabase
         .from('completions')
         .select('id')
         .eq('habit_id', habit.id)
+        .eq('user_id', req.user.id)
         .eq('completed_date', today)
         .single()
 
       // Calculate streak
-      const { data: completions } = await supabase
+      const { data: completions } = await req.supabase
         .from('completions')
         .select('completed_date')
         .eq('habit_id', habit.id)
+        .eq('user_id', req.user.id)
         .order('completed_date', { ascending: false })
 
       let streak = 0
       if (completions && completions.length > 0) {
         const completedDates = new Set(completions.map(c => c.completed_date))
         // Start from today if completed today, otherwise start from yesterday
-        const start = new Date(today)
+        const start = new Date(today + 'T00:00:00.000Z')
         if (!completedDates.has(today)) {
-          start.setDate(start.getDate() - 1)
+          start.setUTCDate(start.getUTCDate() - 1)
         }
         for (let i = 0; ; i++) {
-          const d = new Date(start)
-          d.setDate(d.getDate() - i)
+          const d = new Date(start.getTime())
+          d.setUTCDate(d.getUTCDate() - i)
           const dateStr = d.toISOString().split('T')[0]
           if (completedDates.has(dateStr)) {
             streak++
@@ -112,8 +109,8 @@ router.get('/calendar', async (req, res) => {
     const selectedDate = req.query.date || new Date().toISOString().split('T')[0]
 
     const [{ data: habits, error: habitError }, { data: completions, error: completionError }] = await Promise.all([
-      supabase.from('habits').select('*').order('created_at', { ascending: true }),
-      supabase.from('completions').select('habit_id').eq('completed_date', selectedDate)
+      req.supabase.from('habits').select('*').eq('user_id', req.user.id).order('created_at', { ascending: true }),
+      req.supabase.from('completions').select('habit_id').eq('user_id', req.user.id).eq('completed_date', selectedDate)
     ])
 
     if (habitError) throw habitError
@@ -159,10 +156,11 @@ router.post('/', async (req, res) => {
       level: level || 'Mandatory',
       schedule: normalizeSchedule(schedule),
       reminder_time: reminder_time || null,
-      notes: notes || null
+      notes: notes || null,
+      user_id: req.user.id
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await req.supabase
       .from('habits')
       .insert([payload])
       .select()
@@ -201,10 +199,11 @@ router.patch('/:id', async (req, res) => {
   if (notes !== undefined) updatePayload.notes = notes
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await req.supabase
       .from('habits')
       .update(updatePayload)
       .eq('id', id)
+      .eq('user_id', req.user.id)
       .select()
       .single()
 
@@ -222,18 +221,31 @@ router.post('/:id/toggle', async (req, res) => {
   const date = req.query.date || new Date().toISOString().split('T')[0]
 
   try {
-    const { data: existing } = await supabase
+    // SECURE AUTHZ check: Verify that the habit belongs to the active user
+    const { data: habit, error: habitErr } = await req.supabase
+      .from('habits')
+      .select('id')
+      .eq('id', id)
+      .eq('user_id', req.user.id)
+      .single()
+      
+    if (habitErr || !habit) {
+      return res.status(403).json({ error: 'You are not authorized to modify this habit' })
+    }
+
+    const { data: existing } = await req.supabase
       .from('completions')
       .select('id')
       .eq('habit_id', id)
+      .eq('user_id', req.user.id)
       .eq('completed_date', date)
       .single()
 
     if (existing) {
-      await supabase.from('completions').delete().eq('id', existing.id)
+      await req.supabase.from('completions').delete().eq('id', existing.id).eq('user_id', req.user.id)
       res.json({ success: true, completed: false, date })
     } else {
-      await supabase.from('completions').insert([{ habit_id: id, completed_date: date }])
+      await req.supabase.from('completions').insert([{ habit_id: id, completed_date: date, user_id: req.user.id }])
       res.json({ success: true, completed: true, date })
     }
   } catch (err) {
@@ -246,7 +258,7 @@ router.post('/:id/toggle', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params
   try {
-    const { error } = await supabase.from('habits').delete().eq('id', id)
+    const { error } = await req.supabase.from('habits').delete().eq('id', id).eq('user_id', req.user.id)
     if (error) throw error
     res.json({ success: true })
   } catch (err) {
@@ -263,10 +275,23 @@ router.get('/:id/history', async (req, res) => {
   const fromStr = from.toISOString().split('T')[0]
 
   try {
-    const { data, error } = await supabase
+    // SECURE AUTHZ check: Verify that the habit belongs to the active user
+    const { data: habit, error: habitErr } = await req.supabase
+      .from('habits')
+      .select('id')
+      .eq('id', id)
+      .eq('user_id', req.user.id)
+      .single()
+      
+    if (habitErr || !habit) {
+      return res.status(403).json({ error: 'You are not authorized to view this habit' })
+    }
+
+    const { data, error } = await req.supabase
       .from('completions')
       .select('completed_date')
       .eq('habit_id', id)
+      .eq('user_id', req.user.id)
       .gte('completed_date', fromStr)
 
     if (error) throw error

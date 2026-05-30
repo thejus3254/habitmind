@@ -1,13 +1,7 @@
 const express = require('express')
 const router = express.Router()
 const Groq = require('groq-sdk')
-const { createClient } = require('@supabase/supabase-js')
-
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-)
 
 // POST - rate difficulty of a habit name
 router.post('/rate-difficulty', async (req, res) => {
@@ -38,7 +32,7 @@ router.get('/coach', async (req, res) => {
   try {
     const today = req.query.date || new Date().toISOString().split('T')[0]
 
-    const { data: habits } = await supabase.from('habits').select('*')
+    const { data: habits } = await req.supabase.from('habits').select('*').eq('user_id', req.user.id)
 
     if (!habits || habits.length === 0) {
       return res.json({ success: true, message: "Add your first habit to get started on your journey!" })
@@ -46,17 +40,19 @@ router.get('/coach', async (req, res) => {
 
     // Get completion data for context
     const habitSummary = await Promise.all(habits.map(async (h) => {
-      const { data: completions } = await supabase
+      const { data: completions } = await req.supabase
         .from('completions')
         .select('completed_date')
         .eq('habit_id', h.id)
+        .eq('user_id', req.user.id)
         .order('completed_date', { ascending: false })
         .limit(7)
 
-      const { data: todayData } = await supabase
+      const { data: todayData } = await req.supabase
         .from('completions')
         .select('id')
         .eq('habit_id', h.id)
+        .eq('user_id', req.user.id)
         .eq('completed_date', today)
         .single()
 
@@ -92,22 +88,23 @@ Be encouraging but honest. Mention specific habits by name. Do not use emojis.`
 router.get('/weekly-insight', async (req, res) => {
   try {
     const today = req.query.date || new Date().toISOString().split('T')[0]
-    const refDate = new Date(today)
-    const sevenDaysAgo = new Date(refDate)
-    sevenDaysAgo.setDate(refDate.getDate() - 6)
+    const refDate = new Date(today + 'T00:00:00.000Z')
+    const sevenDaysAgo = new Date(refDate.getTime())
+    sevenDaysAgo.setUTCDate(refDate.getUTCDate() - 6)
     const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0]
 
-    const { data: habits } = await supabase.from('habits').select('*')
+    const { data: habits } = await req.supabase.from('habits').select('*').eq('user_id', req.user.id)
 
     if (!habits || habits.length === 0) {
       return res.json({ success: true, insight: "No habits tracked yet. Start adding habits to get weekly insights." })
     }
 
     const weeklyData = await Promise.all(habits.map(async (h) => {
-      const { data: completions } = await supabase
+      const { data: completions } = await req.supabase
         .from('completions')
         .select('completed_date')
         .eq('habit_id', h.id)
+        .eq('user_id', req.user.id)
         .gte('completed_date', sevenDaysAgoStr)
         .lte('completed_date', today)
 
@@ -169,7 +166,7 @@ Respond in this exact JSON format:
 // POST - suggest new habits based on existing ones
 router.post('/suggest', async (req, res) => {
   try {
-    const { data: habits } = await supabase.from('habits').select('name')
+    const { data: habits } = await req.supabase.from('habits').select('name').eq('user_id', req.user.id)
 
     if (!habits || habits.length === 0) {
       return res.json({ success: true, suggestions: ['Morning walk', 'Read 10 pages', 'Drink 2L water'] })
