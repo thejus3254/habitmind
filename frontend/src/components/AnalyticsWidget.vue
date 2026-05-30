@@ -73,7 +73,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import axios from 'axios'
+import api from '../api.js'
 
 const props = defineProps({ habits: Array })
 const completionRates = ref({})
@@ -96,7 +96,7 @@ async function calculateStats() {
   try {
     await Promise.all(
       props.habits.map(async (habit) => {
-        const res = await axios.get(`http://localhost:3001/api/habits/${habit.id}/history`)
+        const res = await api.get(`/habits/${habit.id}/history`)
         const count = res.data.data.length
         total += count
         rates[habit.id] = Math.round((count / 28) * 100)

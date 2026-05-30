@@ -57,7 +57,7 @@
 
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
-import axios from 'axios'
+import api from '../api.js'
 
 const messages = ref([
   { 
@@ -87,7 +87,7 @@ async function sendMessage() {
 
   try {
     const chatHistory = messages.value.map(m => ({ role: m.role, content: m.content }))
-    const res = await axios.post('http://localhost:3001/api/ai/chat', { messages: chatHistory })
+    const res = await api.post('/ai/chat', { messages: chatHistory })
     messages.value.push({ role: 'assistant', content: res.data.reply })
   } catch (e) {
     console.error('Failed to get coach reply:', e)

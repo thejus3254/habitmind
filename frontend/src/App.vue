@@ -154,7 +154,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import axios from 'axios'
+import api from './api.js'
 import CoachCard from './components/CoachCard.vue'
 import HabitForm from './components/HabitForm.vue'
 import HabitCard from './components/HabitCard.vue'
@@ -165,8 +165,6 @@ import AnalyticsWidget from './components/AnalyticsWidget.vue'
 import MonthCalendar from './components/MonthCalendar.vue'
 import CoachChat from './components/CoachChat.vue'
 import RemindersWidget from './components/RemindersWidget.vue'
-
-const API = 'http://localhost:3001/api'
 
 const activeTab = ref('dashboard')
 const habits = ref([])
@@ -211,7 +209,7 @@ function onCalendarSelectDate(dateStr) {
 
 async function fetchHabits() {
   try {
-    const res = await axios.get(`${API}/habits?date=${selectedDate.value}`)
+    const res = await api.get(`/habits?date=${selectedDate.value}`)
     habits.value = res.data.data
   } catch (e) {
     console.error('Failed to fetch habits:', e)
@@ -221,7 +219,7 @@ async function fetchHabits() {
 async function fetchCoach() {
   coachLoading.value = true
   try {
-    const res = await axios.get(`${API}/ai/coach?date=${selectedDate.value}`)
+    const res = await api.get(`/ai/coach?date=${selectedDate.value}`)
     coachMessage.value = res.data.message
   } catch (e) { console.error(e) }
   finally { coachLoading.value = false }
@@ -230,7 +228,7 @@ async function fetchCoach() {
 async function fetchInsight() {
   insightLoading.value = true
   try {
-    const res = await axios.get(`${API}/ai/weekly-insight?date=${selectedDate.value}`)
+    const res = await api.get(`/ai/weekly-insight?date=${selectedDate.value}`)
     weeklyInsight.value = res.data.insight
   } catch (e) { console.error(e) }
   finally { insightLoading.value = false }
@@ -239,7 +237,7 @@ async function fetchInsight() {
 async function fetchSuggestions() {
   suggestLoading.value = true
   try {
-    const res = await axios.post(`${API}/ai/suggest?date=${selectedDate.value}`)
+    const res = await api.post(`/ai/suggest?date=${selectedDate.value}`)
     suggestions.value = res.data.suggestions
   } catch (e) { console.error(e) }
   finally { suggestLoading.value = false }
@@ -247,7 +245,7 @@ async function fetchSuggestions() {
 
 async function toggleHabit(id) {
   try {
-    await axios.post(`${API}/habits/${id}/toggle?date=${selectedDate.value}`)
+    await api.post(`/habits/${id}/toggle?date=${selectedDate.value}`)
     await fetchHabits()
     fetchCoach()
   } catch (e) {
@@ -273,7 +271,7 @@ async function confirmDelete() {
   if (!habitToDelete.value) return
   deletingHabit.value = true
   try {
-    await axios.delete(`${API}/habits/${habitToDelete.value.id}`)
+    await api.delete(`/habits/${habitToDelete.value.id}`)
     await fetchHabits()
     await fetchSuggestions()
   } catch (e) {
@@ -303,14 +301,14 @@ async function onHabitSubmit(payload) {
 
     if (!difficulty) {
       try {
-        const ratingRes = await axios.post(`${API}/ai/rate-difficulty`, { name })
+        const ratingRes = await api.post(`/ai/rate-difficulty`, { name })
         difficulty = ratingRes.data.difficulty || 'Medium'
       } catch (err) {
         difficulty = 'Medium'
       }
     }
 
-    await axios.post(`${API}/habits`, {
+    await api.post(`/habits`, {
       name,
       difficulty,
       level,
@@ -330,9 +328,9 @@ async function onHabitSubmit(payload) {
 
 async function addSuggestion(name) {
   try {
-    const ratingRes = await axios.post(`${API}/ai/rate-difficulty`, { name })
+    const ratingRes = await api.post(`/ai/rate-difficulty`, { name })
     const difficulty = ratingRes.data.difficulty || 'Medium'
-    await axios.post(`${API}/habits`, {
+    await api.post(`/habits`, {
       name,
       difficulty,
       level: 'Mandatory',

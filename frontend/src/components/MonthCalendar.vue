@@ -44,7 +44,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import axios from 'axios'
+import api from '../api.js'
 
 const props = defineProps({
   habits: Array,
@@ -70,7 +70,7 @@ async function loadAllHistories() {
   try {
     await Promise.all(
       props.habits.map(async (habit) => {
-        const res = await axios.get(`http://localhost:3001/api/habits/${habit.id}/history`)
+        const res = await api.get(`/habits/${habit.id}/history`)
         const dates = res.data.data
         dates.forEach((d) => {
           if (!map[d]) map[d] = []

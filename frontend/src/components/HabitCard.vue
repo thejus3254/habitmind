@@ -48,7 +48,7 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import axios from 'axios'
+import api from '../api.js'
 import DotGrid from './DotGrid.vue'
 
 const props = defineProps({ habit: Object, color: String })
@@ -68,7 +68,7 @@ const completionRate = computed(() => {
 
 async function fetchHistory() {
   try {
-    const res = await axios.get(`http://localhost:3001/api/habits/${props.habit.id}/history`)
+    const res = await api.get(`/habits/${props.habit.id}/history`)
     history.value = res.data.data
   } catch (e) {
     console.error('Failed to fetch habit history:', e)
