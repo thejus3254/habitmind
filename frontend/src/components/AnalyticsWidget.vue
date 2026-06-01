@@ -50,18 +50,14 @@
     <div class="breakdown-card glass-panel" v-if="habits.length">
       <h3 class="breakdown-title">Habit Efficiency Breakdown</h3>
       <div class="breakdown-list">
-        <div 
-          v-for="habit in habits" 
-          :key="habit.id" 
-          class="breakdown-row"
-        >
+        <div v-for="habit in habits" :key="habit.id" class="breakdown-row">
           <div class="row-info">
             <span class="habit-name">{{ habit.name }}</span>
             <span class="habit-pct">{{ completionRates[habit.id] || 0 }}%</span>
           </div>
           <div class="row-track">
-            <div 
-              class="row-bar" 
+            <div
+              class="row-bar"
               :style="{ width: `${completionRates[habit.id] || 0}%`, background: getHabitColor(habit.id) }"
             ></div>
           </div>
@@ -73,7 +69,6 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import api from '../api.js'
 
 const props = defineProps({ habits: Array })
 const completionRates = ref({})
@@ -84,7 +79,7 @@ const colors = [
   '#8b5cf6', '#06b6d4', '#f97316', '#ef4444'
 ]
 
-async function calculateStats() {
+function calculateStats() {
   if (!props.habits || props.habits.length === 0) {
     completionRates.value = {}
     totalCompletions.value = 0
@@ -93,23 +88,15 @@ async function calculateStats() {
 
   let total = 0
   const rates = {}
-  try {
-    await Promise.all(
-      props.habits.map(async (habit) => {
-        const res = await api.get(`/habits/${habit.id}/history`)
-        const count = res.data.data.length
-        total += count
-        rates[habit.id] = Math.round((count / 28) * 100)
-      })
-    )
-    totalCompletions.value = total
-    completionRates.value = rates
-  } catch (e) {
-    console.error('Failed to calculate analytics:', e)
-  }
+  props.habits.forEach((habit) => {
+    const count = (habit.history || []).length
+    total += count
+    rates[habit.id] = Math.round((count / 28) * 100)
+  })
+  totalCompletions.value = total
+  completionRates.value = rates
 }
 
-// Recalculate stats when habits change
 watch(() => props.habits, calculateStats, { deep: true, immediate: true })
 
 const streakLeader = computed(() => {
@@ -208,7 +195,6 @@ function getHabitColor(id) {
   transition: width 0.4s ease;
 }
 
-/* Breakdown List Card */
 .breakdown-card {
   padding: 1.5rem;
 }

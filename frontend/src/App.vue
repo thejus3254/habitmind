@@ -11,27 +11,14 @@
           </div>
         </div>
 
-        <!-- Tab Navigation inside Header -->
         <div class="tabs-nav">
-          <button 
-            class="tab-btn" 
-            :class="{ active: activeTab === 'dashboard' }" 
-            @click="activeTab = 'dashboard'"
-          >
+          <button class="tab-btn" :class="{ active: activeTab === 'dashboard' }" @click="activeTab = 'dashboard'">
             🏠 Dashboard
           </button>
-          <button 
-            class="tab-btn" 
-            :class="{ active: activeTab === 'analytics' }" 
-            @click="activeTab = 'analytics'"
-          >
+          <button class="tab-btn" :class="{ active: activeTab === 'analytics' }" @click="activeTab = 'analytics'">
             📊 Calendar & Stats
           </button>
-          <button 
-            class="tab-btn" 
-            :class="{ active: activeTab === 'chat' }" 
-            @click="activeTab = 'chat'"
-          >
+          <button class="tab-btn" :class="{ active: activeTab === 'chat' }" @click="activeTab = 'chat'">
             💬 AI Coach Chat
           </button>
         </div>
@@ -57,7 +44,6 @@
     </header>
 
     <main class="main">
-      <!-- Time-Travel Banner -->
       <div class="time-travel-banner glass-panel fade-in" v-if="selectedDate !== todayStr">
         <div class="banner-left">
           <span class="banner-icon">🌌</span>
@@ -68,18 +54,27 @@
         <button class="btn-reset-date" @click="selectedDate = todayStr">Reset to Today</button>
       </div>
 
-      <!-- Dashboard View -->
+      <!-- Streak Milestone Toast -->
+      <Transition name="milestone-pop">
+        <div class="milestone-toast" v-if="milestoneToast">
+          <span class="milestone-emoji">🔥</span>
+          <div class="milestone-text">
+            <strong>{{ milestoneToast.streak }}-Day Streak!</strong>
+            <span>{{ milestoneToast.name }}</span>
+          </div>
+        </div>
+      </Transition>
+
       <div class="tab-content" v-show="activeTab === 'dashboard'">
         <WeekStrip :selected-date="selectedDate" @select-date="selectDate" />
         <div class="dashboard-grid">
-          <!-- Left Column: Habits Tracking & Form -->
           <div class="dashboard-col col-left">
             <div class="section glass-panel">
               <div class="section-header">
                 <h2 class="section-title">Habits Orbit</h2>
                 <span class="badge">{{ habits.length }} tracked</span>
               </div>
-              
+
               <HabitForm :adding="habitAdding" :selected-date="selectedDate" @submit="onHabitSubmit" />
 
               <div class="habit-list" v-if="habits.length">
@@ -100,28 +95,19 @@
             </div>
           </div>
 
-          <!-- Right Column: AI Coach, Insights & Suggestions -->
           <div class="dashboard-col col-right">
-            <!-- Daily Reminders timeline -->
             <RemindersWidget
               :habits="habits"
               :permission="notificationsPermission"
               @request-permission="requestNotificationPermission"
             />
-
-            <!-- Coach Message -->
             <CoachCard :message="coachMessage" :loading="coachLoading" @refresh="fetchCoach" />
-
-            <!-- Weekly Insights -->
             <WeeklyInsight :insight="weeklyInsight" :loading="insightLoading" @refresh="fetchInsight" />
-
-            <!-- AI suggestions -->
             <SuggestionsCard :suggestions="suggestions" :loading="suggestLoading" @refresh="fetchSuggestions" @add="addSuggestion" />
           </div>
         </div>
       </div>
 
-      <!-- Calendar & Analytics View -->
       <div class="tab-content fade-in" v-show="activeTab === 'analytics'">
         <div class="analytics-grid">
           <AnalyticsWidget :habits="habits" />
@@ -129,7 +115,6 @@
         </div>
       </div>
 
-      <!-- AI Coach Chat View -->
       <div class="tab-content fade-in" v-show="activeTab === 'chat'">
         <CoachChat />
       </div>
@@ -139,7 +124,6 @@
       <p>© 2026 HabitMind · Designed & Engineered by Thejus</p>
     </footer>
 
-    <!-- Delete Confirmation Modal -->
     <div class="modal-backdrop" v-if="habitToDelete" @click="cancelDelete">
       <div class="modal-card glass-panel" @click.stop>
         <div class="modal-header">
@@ -167,6 +151,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import api from './api.js'
 import { supabase } from './supabaseClient.js'
+import { useSounds } from './composables/useSounds.js'
 import CoachCard from './components/CoachCard.vue'
 import HabitForm from './components/HabitForm.vue'
 import HabitCard from './components/HabitCard.vue'
@@ -180,10 +165,15 @@ import RemindersWidget from './components/RemindersWidget.vue'
 import AuthScreen from './components/AuthScreen.vue'
 import ErrorToast from './components/ErrorToast.vue'
 
+const { playComplete, playUntoggle, playStreakMilestone, playReminder } = useSounds()
+
 const activeTab = ref('dashboard')
 const habits = ref([])
+const milestoneToast = ref(null)
+let milestoneTimer = null
 
-// Authentication States
+const MILESTONE_STREAKS = [7, 14, 30]
+
 const token = ref(localStorage.getItem('hm_token') || null)
 const user = ref(JSON.parse(localStorage.getItem('hm_user') || 'null'))
 
@@ -192,8 +182,6 @@ function handleAuthSuccess({ user: loggedInUser, token: authToken }) {
   user.value = loggedInUser
   localStorage.setItem('hm_token', authToken)
   localStorage.setItem('hm_user', JSON.stringify(loggedInUser))
-  
-  // Instantly fetch all personalized data upon login
   fetchHabits()
   fetchCoach()
   fetchInsight()
@@ -207,12 +195,12 @@ function handleLogout() {
   localStorage.removeItem('hm_user')
   habits.value = []
   suggestions.value = []
-  
   if (reminderInterval) {
     clearInterval(reminderInterval)
     reminderInterval = null
   }
 }
+
 const coachMessage = ref('')
 const coachLoading = ref(false)
 const weeklyInsight = ref(null)
@@ -225,27 +213,22 @@ const colors = [
   '#8b5cf6', '#06b6d4', '#f97316', '#ef4444'
 ]
 
-// Date Travel States
 const selectedDate = ref(new Date().toISOString().split('T')[0])
 const todayStr = new Date().toISOString().split('T')[0]
 
-// HTML5 Web Notifications
 const notificationsPermission = ref(typeof Notification !== 'undefined' ? Notification.permission : 'default')
 const notifiedAlerts = new Set()
+const notifiedMilestones = new Set()
 let reminderInterval = null
 
-const completedCount = computed(() => {
-  return habits.value.filter(h => h.completed_today).length
-})
+const completedCount = computed(() => habits.value.filter(h => h.completed_today).length)
 
 function formatDisplayDate(dateStr) {
   const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }
   return new Date(dateStr).toLocaleDateString('en-US', options)
 }
 
-function selectDate(dateStr) {
-  selectedDate.value = dateStr
-}
+function selectDate(dateStr) { selectedDate.value = dateStr }
 
 function onCalendarSelectDate(dateStr) {
   selectedDate.value = dateStr
@@ -288,10 +271,50 @@ async function fetchSuggestions() {
   finally { suggestLoading.value = false }
 }
 
+function showMilestoneToast(habit, streak) {
+  milestoneToast.value = { name: habit.name, streak }
+  if (milestoneTimer) clearTimeout(milestoneTimer)
+  milestoneTimer = setTimeout(() => { milestoneToast.value = null }, 4000)
+}
+
 async function toggleHabit(id) {
+  const habitBefore = habits.value.find(h => h.id === id)
+  const wasCompleted = habitBefore?.completed_today
+
   try {
     await api.post(`/habits/${id}/toggle?date=${selectedDate.value}`)
     await fetchHabits()
+
+    const habitAfter = habits.value.find(h => h.id === id)
+
+    if (!wasCompleted) {
+      // Just completed
+      playComplete()
+
+      // Check for streak milestone
+      if (habitAfter) {
+        const newStreak = habitAfter.streak
+        const milestoneHit = MILESTONE_STREAKS.find(m => newStreak === m)
+        const milestoneKey = `${id}-${newStreak}`
+
+        if (milestoneHit && !notifiedMilestones.has(milestoneKey)) {
+          notifiedMilestones.add(milestoneKey)
+          playStreakMilestone(milestoneHit)
+          showMilestoneToast(habitAfter, milestoneHit)
+
+          if (notificationsPermission.value === 'granted') {
+            new Notification('🔥 Streak Milestone!', {
+              body: `${habitAfter.name} — ${milestoneHit}-day streak achieved! Keep it up!`,
+              icon: '/favicon.ico'
+            })
+          }
+        }
+      }
+    } else {
+      // Untoggled
+      playUntoggle()
+    }
+
     fetchCoach()
   } catch (e) {
     console.error('Failed to toggle habit:', e)
@@ -303,14 +326,10 @@ const deletingHabit = ref(false)
 
 function deleteHabit(id) {
   const habit = habits.value.find(h => h.id === id)
-  if (habit) {
-    habitToDelete.value = habit
-  }
+  if (habit) habitToDelete.value = habit
 }
 
-function cancelDelete() {
-  habitToDelete.value = null
-}
+function cancelDelete() { habitToDelete.value = null }
 
 async function confirmDelete() {
   if (!habitToDelete.value) return
@@ -353,14 +372,7 @@ async function onHabitSubmit(payload) {
       }
     }
 
-    await api.post(`/habits`, {
-      name,
-      difficulty,
-      level,
-      schedule,
-      reminder_time,
-      notes
-    })
+    await api.post(`/habits`, { name, difficulty, level, schedule, reminder_time, notes })
     await fetchHabits()
     fetchCoach()
     fetchSuggestions()
@@ -375,40 +387,12 @@ async function addSuggestion(name) {
   try {
     const ratingRes = await api.post(`/ai/rate-difficulty`, { name })
     const difficulty = ratingRes.data.difficulty || 'Medium'
-    await api.post(`/habits`, {
-      name,
-      difficulty,
-      level: 'Mandatory',
-      schedule: { rule: 'Daily', days: [] }
-    })
+    await api.post(`/habits`, { name, difficulty, level: 'Mandatory', schedule: { rule: 'Daily', days: [] } })
     await fetchHabits()
     await fetchSuggestions()
     fetchCoach()
   } catch (e) {
     console.error('Failed to add suggestion:', e)
-  }
-}
-
-// Notification chime utilizing AudioContext
-function playNotificationChime() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)()
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    
-    osc.type = 'sine'
-    osc.frequency.setValueAtTime(587.33, ctx.currentTime) // D5
-    osc.frequency.setValueAtTime(880.00, ctx.currentTime + 0.1) // A5
-    
-    gain.gain.setValueAtTime(0.15, ctx.currentTime)
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4)
-    
-    osc.connect(gain)
-    gain.connect(ctx.destination)
-    osc.start()
-    osc.stop(ctx.currentTime + 0.4)
-  } catch (e) {
-    console.error('Failed to play chime:', e)
   }
 }
 
@@ -420,12 +404,10 @@ async function requestNotificationPermission() {
 
 function checkReminders() {
   if (selectedDate.value !== todayStr) return
-  
+
   const now = new Date()
-  const currentHours = String(now.getHours()).padStart(2, '0')
-  const currentMinutes = String(now.getMinutes()).padStart(2, '0')
-  const currentTimeStr = `${currentHours}:${currentMinutes}`
-  
+  const currentTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+
   habits.value.forEach((habit) => {
     if (
       habit.scheduled_today &&
@@ -436,11 +418,11 @@ function checkReminders() {
       const alertKey = `${habit.id}-${currentTimeStr}`
       if (notifiedAlerts.has(alertKey)) return
       notifiedAlerts.add(alertKey)
-      
-      playNotificationChime()
-      
+
+      playReminder()
+
       if (notificationsPermission.value === 'granted') {
-        new Notification('HabitMind Reminder', {
+        new Notification('⏰ HabitMind Reminder', {
           body: `Time to orbit your habit: "${habit.name}" (${habit.level})!`,
           icon: '/favicon.ico'
         })
@@ -449,7 +431,6 @@ function checkReminders() {
   })
 }
 
-// Watch selectedDate to fetch state correctly
 watch(selectedDate, async () => {
   if (token.value) {
     await fetchHabits()
@@ -458,12 +439,9 @@ watch(selectedDate, async () => {
   }
 })
 
-// Listen for auth state changes (token refresh, sign out, etc.)
 let authListener = null
 
 onMounted(async () => {
-  // Check for Supabase OAuth session (Google redirect callback)
-  // PKCE flow uses ?code= query param, implicit flow uses #access_token= hash
   if (!token.value) {
     const urlParams = new URLSearchParams(window.location.search)
     const hasAuthCode = urlParams.has('code')
@@ -491,7 +469,6 @@ onMounted(async () => {
     fetchCoach()
     fetchInsight()
     fetchSuggestions()
-    
     reminderInterval = setInterval(checkReminders, 30000)
   }
 
@@ -504,16 +481,17 @@ onMounted(async () => {
     }
   })
   authListener = subscription
+
+  const { playComplete, playUntoggle, playStreakMilestone, playReminder, unlockAudio } = useSounds()
+
+  // Add inside onMounted:
+  window.addEventListener('click', unlockAudio, { once: true })
 })
 
 onUnmounted(() => {
-  if (reminderInterval) {
-    clearInterval(reminderInterval)
-    reminderInterval = null
-  }
-  if (authListener) {
-    authListener.unsubscribe()
-  }
+  if (reminderInterval) { clearInterval(reminderInterval); reminderInterval = null }
+  if (milestoneTimer) { clearTimeout(milestoneTimer); milestoneTimer = null }
+  if (authListener) authListener.unsubscribe()
 })
 </script>
 
@@ -562,10 +540,7 @@ onUnmounted(() => {
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
 }
 
-.logo-info {
-  display: flex;
-  flex-direction: column;
-}
+.logo-info { display: flex; flex-direction: column; }
 
 .logo-text {
   font-size: 22px;
@@ -587,10 +562,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
-.header-stats {
-  display: flex;
-  gap: 1rem;
-}
+.header-stats { display: flex; gap: 1rem; }
 
 .user-profile-header {
   display: flex;
@@ -631,10 +603,6 @@ onUnmounted(() => {
   transform: translateY(-1px);
 }
 
-.btn-logout:active {
-  transform: translateY(0);
-}
-
 .stat-pill {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border-color);
@@ -658,9 +626,7 @@ onUnmounted(() => {
   color: var(--text-primary);
 }
 
-.stat-value.success {
-  color: var(--success);
-}
+.stat-value.success { color: var(--success); }
 
 .main {
   display: flex;
@@ -694,9 +660,7 @@ onUnmounted(() => {
   gap: 2rem;
 }
 
-.section {
-  padding: 1.75rem;
-}
+.section { padding: 1.75rem; }
 
 .section-header {
   display: flex;
@@ -736,24 +700,9 @@ onUnmounted(() => {
   margin-top: 1rem;
 }
 
-.empty-icon {
-  font-size: 2.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.empty-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 0.25rem;
-}
-
-.empty-desc {
-  font-size: 13px;
-  color: var(--text-secondary);
-  max-width: 320px;
-  margin: 0 auto;
-}
+.empty-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+.empty-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 0.25rem; }
+.empty-desc { font-size: 13px; color: var(--text-secondary); max-width: 320px; margin: 0 auto; }
 
 .footer {
   margin-top: auto;
@@ -764,59 +713,72 @@ onUnmounted(() => {
   border-top: 1px solid var(--border-color);
 }
 
-/* Micro-animations */
+/* Milestone Toast */
+.milestone-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px;
+  border-radius: 16px;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 20px rgba(245, 158, 11, 0.2);
+}
+
+.milestone-emoji { font-size: 24px; }
+
+.milestone-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.milestone-text strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fbbf24;
+}
+
+.milestone-text span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.milestone-pop-enter-active {
+  animation: milestoneIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.milestone-pop-leave-active {
+  animation: milestoneOut 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes milestoneIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-20px) scale(0.9); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+@keyframes milestoneOut {
+  from { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateX(-50%) translateY(-20px) scale(0.9); }
+}
+
 .fade-in {
   animation: fadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 @keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-@media (max-width: 968px) {
-  .dashboard-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 768px) {
-  .header-content {
-    flex-direction: column;
-    align-items: center;
-  }
-  
-  .tabs-nav {
-    width: 100%;
-    justify-content: center;
-    order: 3;
-  }
-}
-
-@media (max-width: 576px) {
-  .header-stats {
-    width: 100%;
-    justify-content: flex-start;
-  }
-  .stat-pill {
-    flex: 1;
-    align-items: flex-start;
-  }
-}
-
-/* Modal Scoped Styles */
+/* Modal */
 .modal-backdrop {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
   background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(8px);
   display: flex;
@@ -836,23 +798,9 @@ onUnmounted(() => {
   animation: modalScaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.modal-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 0.75rem;
-}
-
-.warning-icon {
-  font-size: 20px;
-}
-
-.modal-header h3 {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0;
-}
+.modal-header { display: flex; align-items: center; gap: 10px; margin-bottom: 0.75rem; }
+.warning-icon { font-size: 20px; }
+.modal-header h3 { font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0; }
 
 .modal-body {
   font-size: 14px;
@@ -862,15 +810,8 @@ onUnmounted(() => {
   text-align: left;
 }
 
-.modal-body strong {
-  color: var(--text-primary);
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-}
+.modal-body strong { color: var(--text-primary); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 12px; }
 
 .btn-cancel {
   background: rgba(255, 255, 255, 0.03);
@@ -885,10 +826,7 @@ onUnmounted(() => {
   transition: all 0.2s;
 }
 
-.btn-cancel:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: var(--border-hover);
-}
+.btn-cancel:hover { background: rgba(255, 255, 255, 0.08); border-color: var(--border-hover); }
 
 .btn-confirm-delete {
   background: var(--danger);
@@ -904,27 +842,12 @@ onUnmounted(() => {
   box-shadow: 0 4px 12px var(--danger-glow);
 }
 
-.btn-confirm-delete:hover:not(:disabled) {
-  background: #dc2626;
-  box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
-}
+.btn-confirm-delete:hover:not(:disabled) { background: #dc2626; box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4); }
+.btn-confirm-delete:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-confirm-delete:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+@keyframes modalFadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modalScaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
-@keyframes modalFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes modalScaleIn {
-  from { transform: scale(0.95); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
-}
-
-/* Time Travel Banner Styles */
 .time-travel-banner {
   display: flex;
   justify-content: space-between;
@@ -937,24 +860,10 @@ onUnmounted(() => {
   margin-bottom: 0.5rem;
 }
 
-.banner-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.banner-icon {
-  font-size: 1.25rem;
-}
-
-.banner-text {
-  font-size: 13.5px;
-  color: var(--text-primary);
-}
-
-.banner-text strong {
-  color: var(--primary);
-}
+.banner-left { display: flex; align-items: center; gap: 12px; }
+.banner-icon { font-size: 1.25rem; }
+.banner-text { font-size: 13.5px; color: var(--text-primary); }
+.banner-text strong { color: var(--primary); }
 
 .btn-reset-date {
   background: var(--primary);
@@ -970,8 +879,15 @@ onUnmounted(() => {
   transition: all 0.2s ease;
 }
 
-.btn-reset-date:hover {
-  background: var(--primary-hover);
-  transform: translateY(-1px);
+.btn-reset-date:hover { background: var(--primary-hover); transform: translateY(-1px); }
+
+@media (max-width: 968px) { .dashboard-grid { grid-template-columns: 1fr; } }
+@media (max-width: 768px) {
+  .header-content { flex-direction: column; align-items: center; }
+  .tabs-nav { width: 100%; justify-content: center; order: 3; }
+}
+@media (max-width: 576px) {
+  .header-stats { width: 100%; justify-content: flex-start; }
+  .stat-pill { flex: 1; align-items: flex-start; }
 }
 </style>
