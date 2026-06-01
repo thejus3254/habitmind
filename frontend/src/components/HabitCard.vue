@@ -47,14 +47,13 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
-import api from '../api.js'
+import { computed } from 'vue'
 import DotGrid from './DotGrid.vue'
 
 const props = defineProps({ habit: Object, color: String })
-const emit = defineEmits(['toggle', 'delete'])
+defineEmits(['toggle', 'delete'])
 
-const history = ref([])
+const history = computed(() => props.habit.history || [])
 
 const difficultyClass = computed(() => {
   return props.habit.difficulty?.toLowerCase() || 'medium'
@@ -62,26 +61,7 @@ const difficultyClass = computed(() => {
 
 const completionRate = computed(() => {
   if (!history.value.length) return 0
-  const completedIn28Days = history.value.length
-  return Math.round((completedIn28Days / 28) * 100)
-})
-
-async function fetchHistory() {
-  try {
-    const res = await api.get(`/habits/${props.habit.id}/history`)
-    history.value = res.data.data
-  } catch (e) {
-    console.error('Failed to fetch habit history:', e)
-  }
-}
-
-// Watch completion status to refetch history when user toggles
-watch(() => props.habit.completed_today, () => {
-  fetchHistory()
-})
-
-onMounted(() => {
-  fetchHistory()
+  return Math.round((history.value.length / 28) * 100)
 })
 </script>
 
@@ -231,11 +211,11 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   transition: all 0.2s ease;
-  opacity: 0; /* Hidden by default */
+  opacity: 0;
 }
 
 .habit-card:hover .btn-delete {
-  opacity: 1; /* Fade in on hover */
+  opacity: 1;
 }
 
 .btn-delete:hover {

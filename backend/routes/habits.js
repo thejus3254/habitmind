@@ -13,7 +13,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 // Allowed enum values
 const VALID_DIFFICULTIES = ['Easy', 'Medium', 'Hard']
-const VALID_LEVELS = ['Mandatory', 'Optional', 'Aspirational']
+const VALID_LEVELS = ['Mandatory', 'Optional', 'Aspirational', 'Flexible']
 const MAX_NAME_LENGTH = 200
 const MAX_NOTES_LENGTH = 1000
 
@@ -41,7 +41,7 @@ function isScheduledOnDate(habit, dateStr) {
   const schedule = normalizeSchedule(habit.schedule)
   const date = new Date(dateStr)
   const dayOfMonth = date.getUTCDate()
-  const dayOfWeek = date.getUTCDay() // 0 = Sunday, 1 = Monday
+  const dayOfWeek = date.getUTCDay()
 
   if (schedule.rule === 'Daily') return true
   if (schedule.rule === 'Even Days') return dayOfMonth % 2 === 0
@@ -61,11 +61,10 @@ function isScheduledOnDate(habit, dateStr) {
   return true
 }
 
-// GET all habits with today's completion status and streak — OPTIMIZED: batch queries
+// GET all habits with today's completion status, streak, and 28-day history — OPTIMIZED: batch queries
 router.get('/', asyncHandler(async (req, res) => {
   const today = req.query.date || new Date().toISOString().split('T')[0]
 
-  // Single query to fetch all habits
   const { data: habits, error } = await req.supabase
     .from('habits')
     .select('*')
@@ -79,23 +78,31 @@ router.get('/', asyncHandler(async (req, res) => {
 
   const habitIds = habits.map(h => h.id)
 
-  // Batch query: get today's completions for ALL habits at once
-  const { data: todayCompletions } = await req.supabase
-    .from('completions')
-    .select('habit_id')
-    .eq('user_id', req.user.id)
-    .eq('completed_date', today)
-    .in('habit_id', habitIds)
+  // Calculate date 27 days ago for history window
+  const historyFrom = new Date(today + 'T00:00:00.000Z')
+  historyFrom.setUTCDate(historyFrom.getUTCDate() - 27)
+  const historyFromStr = historyFrom.toISOString().split('T')[0]
+
+  // Batch query: get today's completions + ALL completions for streak + history in parallel
+  const [
+    { data: todayCompletions },
+    { data: allCompletions }
+  ] = await Promise.all([
+    req.supabase
+      .from('completions')
+      .select('habit_id')
+      .eq('user_id', req.user.id)
+      .eq('completed_date', today)
+      .in('habit_id', habitIds),
+    req.supabase
+      .from('completions')
+      .select('habit_id, completed_date')
+      .eq('user_id', req.user.id)
+      .in('habit_id', habitIds)
+      .order('completed_date', { ascending: false })
+  ])
 
   const todaySet = new Set((todayCompletions || []).map(c => c.habit_id))
-
-  // Batch query: get ALL completions for streak calculation
-  const { data: allCompletions } = await req.supabase
-    .from('completions')
-    .select('habit_id, completed_date')
-    .eq('user_id', req.user.id)
-    .in('habit_id', habitIds)
-    .order('completed_date', { ascending: false })
 
   // Group completions by habit_id
   const completionsByHabit = {}
@@ -104,11 +111,12 @@ router.get('/', asyncHandler(async (req, res) => {
     completionsByHabit[c.habit_id].push(c.completed_date)
   }
 
-  // Calculate streak for each habit in-memory
+  // Build enriched habits with streak + history in-memory (no extra queries)
   const enriched = habits.map((habit) => {
     const completions = completionsByHabit[habit.id] || []
-    let streak = 0
 
+    // Calculate streak
+    let streak = 0
     if (completions.length > 0) {
       const completedDates = new Set(completions)
       const start = new Date(today + 'T00:00:00.000Z')
@@ -127,11 +135,15 @@ router.get('/', asyncHandler(async (req, res) => {
       }
     }
 
+    // Filter history to last 28 days
+    const history = completions.filter(date => date >= historyFromStr)
+
     return {
       ...habit,
       completed_today: todaySet.has(habit.id),
       streak,
-      scheduled_today: isScheduledOnDate(habit, today)
+      scheduled_today: isScheduledOnDate(habit, today),
+      history
     }
   })
 
@@ -175,20 +187,13 @@ router.post('/', asyncHandler(async (req, res) => {
     notes
   } = req.body
 
-  // Validate and sanitize name
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'Habit name is required' })
   name = stripHtml(name).substring(0, MAX_NAME_LENGTH)
   if (!name) return res.status(400).json({ error: 'Habit name is required' })
 
-  // Validate enums
-  if (difficulty && !VALID_DIFFICULTIES.includes(difficulty)) {
-    difficulty = 'Medium'
-  }
-  if (level && !VALID_LEVELS.includes(level)) {
-    level = 'Mandatory'
-  }
+  if (difficulty && !VALID_DIFFICULTIES.includes(difficulty)) difficulty = 'Medium'
+  if (level && !VALID_LEVELS.includes(level)) level = 'Mandatory'
 
-  // Sanitize notes
   if (notes) {
     notes = stripHtml(String(notes)).substring(0, MAX_NOTES_LENGTH)
   }
@@ -215,7 +220,7 @@ router.post('/', asyncHandler(async (req, res) => {
   res.json({ success: true, data })
 }))
 
-// PATCH update habit fields such as reminder or schedule
+// PATCH update habit fields
 router.patch('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params
   if (!validateUUID(id)) return res.status(400).json({ error: 'Invalid habit ID format' })
@@ -269,14 +274,13 @@ router.post('/:id/toggle', asyncHandler(async (req, res) => {
 
   const date = req.query.date || new Date().toISOString().split('T')[0]
 
-  // SECURE AUTHZ check: Verify that the habit belongs to the active user
   const { data: habit, error: habitErr } = await req.supabase
     .from('habits')
     .select('id')
     .eq('id', id)
     .eq('user_id', req.user.id)
     .single()
-    
+
   if (habitErr || !habit) {
     return res.status(403).json({ error: 'You are not authorized to modify this habit' })
   }
@@ -308,7 +312,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   res.json({ success: true })
 }))
 
-// GET completion history for last 28 days (for dot grid)
+// GET completion history for last 28 days (kept for backward compatibility)
 router.get('/:id/history', asyncHandler(async (req, res) => {
   const { id } = req.params
   if (!validateUUID(id)) return res.status(400).json({ error: 'Invalid habit ID format' })
@@ -317,14 +321,13 @@ router.get('/:id/history', asyncHandler(async (req, res) => {
   from.setDate(from.getDate() - 27)
   const fromStr = from.toISOString().split('T')[0]
 
-  // SECURE AUTHZ check: Verify that the habit belongs to the active user
   const { data: habit, error: habitErr } = await req.supabase
     .from('habits')
     .select('id')
     .eq('id', id)
     .eq('user_id', req.user.id)
     .single()
-    
+
   if (habitErr || !habit) {
     return res.status(403).json({ error: 'You are not authorized to view this habit' })
   }

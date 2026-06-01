@@ -1,4 +1,5 @@
 <template>
+  <div>
   <div class="page" v-if="token">
     <header class="header glass-panel">
       <div class="header-content">
@@ -159,6 +160,7 @@
   </div>
   <AuthScreen v-else @auth-success="handleAuthSuccess" />
   <ErrorToast />
+  </div>
 </template>
 
 <script setup>
