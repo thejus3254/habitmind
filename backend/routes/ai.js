@@ -3,10 +3,33 @@ const router = express.Router()
 const Groq = require('groq-sdk')
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
+// Async error wrapping helper
+function asyncHandler(fn) {
+  return (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next)
+  }
+}
+
+const MAX_CHAT_MESSAGES = 50
+const MAX_MESSAGE_LENGTH = 2000
+const MAX_HABIT_NAME_LENGTH = 200
+const GROQ_TIMEOUT_MS = 30000
+
+function stripHtml(str) {
+  if (typeof str !== 'string') return str
+  return str.replace(/<[^>]*>/g, '').trim()
+}
+
 // POST - rate difficulty of a habit name
-router.post('/rate-difficulty', async (req, res) => {
-  const { name } = req.body
+router.post('/rate-difficulty', asyncHandler(async (req, res) => {
+  let { name } = req.body
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'Habit name required' })
+  
+  name = stripHtml(name).substring(0, MAX_HABIT_NAME_LENGTH)
   if (!name) return res.status(400).json({ error: 'Habit name required' })
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), GROQ_TIMEOUT_MS)
 
   try {
     const completion = await groq.chat.completions.create({
@@ -17,106 +40,116 @@ router.post('/rate-difficulty', async (req, res) => {
 Reply with ONLY one word: Easy, Medium, or Hard. Nothing else.`
       }],
       temperature: 0.2
-    })
+    }, { signal: controller.signal })
 
+    clearTimeout(timeout)
     const difficulty = completion.choices[0].message.content.trim()
     res.json({ success: true, difficulty })
   } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: 'Failed to rate difficulty' })
+    clearTimeout(timeout)
+    if (err.name === 'AbortError') {
+      return res.status(504).json({ error: 'AI request timed out. Please try again.' })
+    }
+    throw err
   }
-})
+}))
 
 // GET - daily coach message based on streaks
-router.get('/coach', async (req, res) => {
-  try {
-    const today = req.query.date || new Date().toISOString().split('T')[0]
+router.get('/coach', asyncHandler(async (req, res) => {
+  const today = req.query.date || new Date().toISOString().split('T')[0]
 
-    const { data: habits } = await req.supabase.from('habits').select('*').eq('user_id', req.user.id)
+  const { data: habits } = await req.supabase.from('habits').select('*').eq('user_id', req.user.id)
 
-    if (!habits || habits.length === 0) {
-      return res.json({ success: true, message: "Add your first habit to get started on your journey!" })
+  if (!habits || habits.length === 0) {
+    return res.json({ success: true, message: "Add your first habit to get started on your journey!" })
+  }
+
+  // Get completion data for context
+  const habitSummary = await Promise.all(habits.map(async (h) => {
+    const { data: completions } = await req.supabase
+      .from('completions')
+      .select('completed_date')
+      .eq('habit_id', h.id)
+      .eq('user_id', req.user.id)
+      .order('completed_date', { ascending: false })
+      .limit(7)
+
+    const { data: todayData } = await req.supabase
+      .from('completions')
+      .select('id')
+      .eq('habit_id', h.id)
+      .eq('user_id', req.user.id)
+      .eq('completed_date', today)
+      .single()
+
+    return {
+      name: h.name,
+      difficulty: h.difficulty,
+      completions_last_7_days: completions?.length || 0,
+      done_today: !!todayData
     }
+  }))
 
-    // Get completion data for context
-    const habitSummary = await Promise.all(habits.map(async (h) => {
-      const { data: completions } = await req.supabase
-        .from('completions')
-        .select('completed_date')
-        .eq('habit_id', h.id)
-        .eq('user_id', req.user.id)
-        .order('completed_date', { ascending: false })
-        .limit(7)
-
-      const { data: todayData } = await req.supabase
-        .from('completions')
-        .select('id')
-        .eq('habit_id', h.id)
-        .eq('user_id', req.user.id)
-        .eq('completed_date', today)
-        .single()
-
-      return {
-        name: h.name,
-        difficulty: h.difficulty,
-        completions_last_7_days: completions?.length || 0,
-        done_today: !!todayData
-      }
-    }))
-
-    const prompt = `You are a personal habit coach. Here is the user's habit data for today:
+  const prompt = `You are a personal habit coach. Here is the user's habit data for today:
 ${JSON.stringify(habitSummary, null, 2)}
 
 Write a short, warm, personalized coaching message (2-3 sentences) based on their progress.
 Be encouraging but honest. Mention specific habits by name. Do not use emojis.`
 
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), GROQ_TIMEOUT_MS)
+
+  try {
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.7
-    })
+    }, { signal: controller.signal })
 
+    clearTimeout(timeout)
     const message = completion.choices[0].message.content.trim()
     res.json({ success: true, message })
   } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: 'Failed to get coach message' })
+    clearTimeout(timeout)
+    if (err.name === 'AbortError') {
+      return res.status(504).json({ error: 'AI request timed out. Please try again.' })
+    }
+    throw err
   }
-})
+}))
 
 // GET - weekly insight report
-router.get('/weekly-insight', async (req, res) => {
-  try {
-    const today = req.query.date || new Date().toISOString().split('T')[0]
-    const refDate = new Date(today + 'T00:00:00.000Z')
-    const sevenDaysAgo = new Date(refDate.getTime())
-    sevenDaysAgo.setUTCDate(refDate.getUTCDate() - 6)
-    const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0]
+router.get('/weekly-insight', asyncHandler(async (req, res) => {
+  const today = req.query.date || new Date().toISOString().split('T')[0]
+  const refDate = new Date(today + 'T00:00:00.000Z')
+  const sevenDaysAgo = new Date(refDate.getTime())
+  sevenDaysAgo.setUTCDate(refDate.getUTCDate() - 6)
+  const sevenDaysAgoStr = sevenDaysAgo.toISOString().split('T')[0]
 
-    const { data: habits } = await req.supabase.from('habits').select('*').eq('user_id', req.user.id)
+  const { data: habits } = await req.supabase.from('habits').select('*').eq('user_id', req.user.id)
 
-    if (!habits || habits.length === 0) {
-      return res.json({ success: true, insight: "No habits tracked yet. Start adding habits to get weekly insights." })
+  if (!habits || habits.length === 0) {
+    return res.json({ success: true, insight: "No habits tracked yet. Start adding habits to get weekly insights." })
+  }
+
+  const weeklyData = await Promise.all(habits.map(async (h) => {
+    const { data: completions } = await req.supabase
+      .from('completions')
+      .select('completed_date')
+      .eq('habit_id', h.id)
+      .eq('user_id', req.user.id)
+      .gte('completed_date', sevenDaysAgoStr)
+      .lte('completed_date', today)
+
+    return {
+      habit: h.name,
+      difficulty: h.difficulty,
+      days_completed: completions?.length || 0,
+      completion_rate: `${Math.round(((completions?.length || 0) / 7) * 100)}%`
     }
+  }))
 
-    const weeklyData = await Promise.all(habits.map(async (h) => {
-      const { data: completions } = await req.supabase
-        .from('completions')
-        .select('completed_date')
-        .eq('habit_id', h.id)
-        .eq('user_id', req.user.id)
-        .gte('completed_date', sevenDaysAgoStr)
-        .lte('completed_date', today)
-
-      return {
-        habit: h.name,
-        difficulty: h.difficulty,
-        days_completed: completions?.length || 0,
-        completion_rate: `${Math.round(((completions?.length || 0) / 7) * 100)}%`
-      }
-    }))
-
-    const prompt = `You are a habit analyst. Here is the user's past 7 days of habit data:
+  const prompt = `You are a habit analyst. Here is the user's past 7 days of habit data:
 ${JSON.stringify(weeklyData, null, 2)}
 
 Give a weekly insight report with:
@@ -135,12 +168,17 @@ Respond in this exact JSON format:
   "tip": "..."
 }`
 
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), GROQ_TIMEOUT_MS)
+
+  try {
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.4
-    })
+    }, { signal: controller.signal })
 
+    clearTimeout(timeout)
     const raw = completion.choices[0].message.content.trim()
     const clean = raw.replace(/```json|```/g, '').trim()
     let insight
@@ -158,23 +196,25 @@ Respond in this exact JSON format:
 
     res.json({ success: true, insight })
   } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: 'Failed to generate weekly insight' })
+    clearTimeout(timeout)
+    if (err.name === 'AbortError') {
+      return res.status(504).json({ error: 'AI request timed out. Please try again.' })
+    }
+    throw err
   }
-})
+}))
 
 // POST - suggest new habits based on existing ones
-router.post('/suggest', async (req, res) => {
-  try {
-    const { data: habits } = await req.supabase.from('habits').select('name').eq('user_id', req.user.id)
+router.post('/suggest', asyncHandler(async (req, res) => {
+  const { data: habits } = await req.supabase.from('habits').select('name').eq('user_id', req.user.id)
 
-    if (!habits || habits.length === 0) {
-      return res.json({ success: true, suggestions: ['Morning walk', 'Read 10 pages', 'Drink 2L water'] })
-    }
+  if (!habits || habits.length === 0) {
+    return res.json({ success: true, suggestions: ['Morning walk', 'Read 10 pages', 'Drink 2L water'] })
+  }
 
-    const habitNames = habits.map(h => h.name).join(', ')
+  const habitNames = habits.map(h => h.name).join(', ')
 
-    const prompt = `A person is already tracking these habits: ${habitNames}.
+  const prompt = `A person is already tracking these habits: ${habitNames}.
 
 Suggest 3 new complementary habits they are NOT already tracking.
 Respond ONLY in this exact JSON format with no extra text:
@@ -182,12 +222,17 @@ Respond ONLY in this exact JSON format with no extra text:
   "suggestions": ["habit one", "habit two", "habit three"]
 }`
 
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), GROQ_TIMEOUT_MS)
+
+  try {
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.6
-    })
+    }, { signal: controller.signal })
 
+    clearTimeout(timeout)
     const raw = completion.choices[0].message.content.trim()
     const clean = raw.replace(/```json|```/g, '').trim()
     let parsed
@@ -200,39 +245,63 @@ Respond ONLY in this exact JSON format with no extra text:
 
     res.json({ success: true, suggestions: parsed.suggestions })
   } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: 'Failed to generate suggestions' })
+    clearTimeout(timeout)
+    if (err.name === 'AbortError') {
+      return res.status(504).json({ error: 'AI request timed out. Please try again.' })
+    }
+    throw err
   }
-})
+}))
 
 // POST - chat with AI coach
-router.post('/chat', async (req, res) => {
+router.post('/chat', asyncHandler(async (req, res) => {
   const { messages } = req.body
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'Messages array is required' })
   }
 
-  try {
-    const systemPrompt = {
-      role: 'system',
-      content: `You are a supportive, warm, and highly experienced Habit Coach. 
+  // Validate message array size and content length
+  if (messages.length > MAX_CHAT_MESSAGES) {
+    return res.status(400).json({ error: `Too many messages. Maximum ${MAX_CHAT_MESSAGES} allowed.` })
+  }
+
+  for (const msg of messages) {
+    if (!msg.role || !msg.content) {
+      return res.status(400).json({ error: 'Each message must have a role and content.' })
+    }
+    if (typeof msg.content === 'string' && msg.content.length > MAX_MESSAGE_LENGTH) {
+      return res.status(400).json({ error: `Message too long. Maximum ${MAX_MESSAGE_LENGTH} characters per message.` })
+    }
+  }
+
+  const systemPrompt = {
+    role: 'system',
+    content: `You are a supportive, warm, and highly experienced Habit Coach. 
 Your goal is to help the user build healthy routines, stay motivated, and troubleshoot habit failures.
 Give actionable, realistic advice (1-2 short paragraphs). Be encouraging, friendly, and structured. 
 Do not use emojis.`
-    }
+  }
 
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), GROQ_TIMEOUT_MS)
+
+  try {
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [systemPrompt, ...messages],
       temperature: 0.7
-    })
+    }, { signal: controller.signal })
 
+    clearTimeout(timeout)
     const reply = completion.choices[0].message.content.trim()
     res.json({ success: true, reply })
   } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: 'AI Coach failed to reply' })
+    clearTimeout(timeout)
+    if (err.name === 'AbortError') {
+      return res.status(504).json({ error: 'AI request timed out. Please try again.' })
+    }
+    throw err
   }
-})
+}))
 
 module.exports = router

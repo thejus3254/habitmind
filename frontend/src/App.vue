@@ -158,11 +158,13 @@
     </div>
   </div>
   <AuthScreen v-else @auth-success="handleAuthSuccess" />
+  <ErrorToast />
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import api from './api.js'
+import { supabase } from './supabaseClient.js'
 import CoachCard from './components/CoachCard.vue'
 import HabitForm from './components/HabitForm.vue'
 import HabitCard from './components/HabitCard.vue'
@@ -174,6 +176,7 @@ import MonthCalendar from './components/MonthCalendar.vue'
 import CoachChat from './components/CoachChat.vue'
 import RemindersWidget from './components/RemindersWidget.vue'
 import AuthScreen from './components/AuthScreen.vue'
+import ErrorToast from './components/ErrorToast.vue'
 
 const activeTab = ref('dashboard')
 const habits = ref([])
@@ -453,7 +456,27 @@ watch(selectedDate, async () => {
   }
 })
 
+// Listen for auth state changes (token refresh, sign out, etc.)
+let authListener = null
+
 onMounted(async () => {
+  // Check for Supabase OAuth session (Google redirect callback)
+  if (!token.value) {
+    try {
+      const { data, error } = await supabase.auth.getSession()
+      if (data.session && !error) {
+        handleAuthSuccess({
+          user: { id: data.session.user.id, email: data.session.user.email },
+          token: data.session.access_token
+        })
+        window.history.replaceState(null, '', window.location.pathname)
+        return
+      }
+    } catch (err) {
+      console.error('Session detection error:', err)
+    }
+  }
+
   if (token.value) {
     await fetchHabits()
     fetchCoach()
@@ -462,12 +485,25 @@ onMounted(async () => {
     
     reminderInterval = setInterval(checkReminders, 30000)
   }
+
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT') {
+      handleLogout()
+    } else if (event === 'TOKEN_REFRESHED' && session) {
+      token.value = session.access_token
+      localStorage.setItem('hm_token', session.access_token)
+    }
+  })
+  authListener = subscription
 })
 
 onUnmounted(() => {
   if (reminderInterval) {
     clearInterval(reminderInterval)
     reminderInterval = null
+  }
+  if (authListener) {
+    authListener.unsubscribe()
   }
 })
 </script>
