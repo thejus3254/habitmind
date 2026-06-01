@@ -1,15 +1,9 @@
 // useSounds.js — HabitMind Sound Engine
-let sharedCtx = null
 
 function getContext() {
-  if (!sharedCtx) {
-    sharedCtx = new (window.AudioContext || window.webkitAudioContext)()
-  }
-  // Resume if suspended (browser autoplay policy)
-  if (sharedCtx.state === 'suspended') {
-    sharedCtx.resume()
-  }
-  return sharedCtx
+  const ctx = new (window.AudioContext || window.webkitAudioContext)()
+  if (ctx.state === 'suspended') ctx.resume()
+  return ctx
 }
 
 export function useSounds() {
@@ -32,6 +26,8 @@ export function useSounds() {
         osc.start(ctx.currentTime + start)
         osc.stop(ctx.currentTime + start + dur)
       })
+      // Close context after sound finishes to free resources
+      setTimeout(() => ctx.close(), 1000)
     } catch (e) { console.error('Sound error:', e) }
   }
 
@@ -49,6 +45,7 @@ export function useSounds() {
       gain.connect(ctx.destination)
       osc.start()
       osc.stop(ctx.currentTime + 0.12)
+      setTimeout(() => ctx.close(), 500)
     } catch (e) { console.error('Sound error:', e) }
   }
 
@@ -88,6 +85,7 @@ export function useSounds() {
         osc.start(ctx.currentTime + start)
         osc.stop(ctx.currentTime + start + dur)
       })
+      setTimeout(() => ctx.close(), 1500)
     } catch (e) { console.error('Sound error:', e) }
   }
 
@@ -110,12 +108,15 @@ export function useSounds() {
         osc.start(ctx.currentTime + start)
         osc.stop(ctx.currentTime + start + dur)
       })
+      setTimeout(() => ctx.close(), 1000)
     } catch (e) { console.error('Sound error:', e) }
   }
 
-  // Call this once on any user interaction to unlock audio
   function unlockAudio() {
-    getContext()
+    try {
+      const ctx = getContext()
+      setTimeout(() => ctx.close(), 500)
+    } catch (e) {}
   }
 
   return { playComplete, playUntoggle, playStreakMilestone, playReminder, unlockAudio }
