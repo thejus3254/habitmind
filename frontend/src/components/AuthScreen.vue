@@ -331,17 +331,24 @@ async function handleSubmit() {
 
 // Check for OAuth redirect callback on mount
 onMounted(async () => {
-  // If URL has hash fragments (from OAuth redirect), show loading
-  if (window.location.hash && window.location.hash.includes('access_token')) {
+  // Detect OAuth redirect: PKCE uses ?code= in query string, implicit uses #access_token= in hash
+  const urlParams = new URLSearchParams(window.location.search)
+  const hasAuthCode = urlParams.has('code')
+  const hasHashToken = window.location.hash && window.location.hash.includes('access_token')
+
+  if (hasAuthCode || hasHashToken) {
     oauthLoading.value = true
     try {
+      // For PKCE flow, Supabase's detectSessionInUrl will exchange the code automatically
+      // For implicit flow, it reads from the hash fragment
+      // Either way, getSession() will return the session after exchangeCodeForSession completes
       const { data, error } = await supabase.auth.getSession()
       if (data.session && !error) {
         emit('auth-success', {
           user: { id: data.session.user.id, email: data.session.user.email },
           token: data.session.access_token
         })
-        // Clean up URL
+        // Clean up URL (remove code/state params and hash fragments)
         window.history.replaceState(null, '', window.location.pathname)
         return
       }

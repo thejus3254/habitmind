@@ -461,19 +461,26 @@ let authListener = null
 
 onMounted(async () => {
   // Check for Supabase OAuth session (Google redirect callback)
+  // PKCE flow uses ?code= query param, implicit flow uses #access_token= hash
   if (!token.value) {
-    try {
-      const { data, error } = await supabase.auth.getSession()
-      if (data.session && !error) {
-        handleAuthSuccess({
-          user: { id: data.session.user.id, email: data.session.user.email },
-          token: data.session.access_token
-        })
-        window.history.replaceState(null, '', window.location.pathname)
-        return
+    const urlParams = new URLSearchParams(window.location.search)
+    const hasAuthCode = urlParams.has('code')
+    const hasHashToken = window.location.hash && window.location.hash.includes('access_token')
+
+    if (hasAuthCode || hasHashToken) {
+      try {
+        const { data, error } = await supabase.auth.getSession()
+        if (data.session && !error) {
+          handleAuthSuccess({
+            user: { id: data.session.user.id, email: data.session.user.email },
+            token: data.session.access_token
+          })
+          window.history.replaceState(null, '', window.location.pathname)
+          return
+        }
+      } catch (err) {
+        console.error('Session detection error:', err)
       }
-    } catch (err) {
-      console.error('Session detection error:', err)
     }
   }
 

@@ -1,7 +1,13 @@
 import axios from 'axios'
 import { supabase } from './supabaseClient.js'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || (
+  import.meta.env.DEV ? 'http://localhost:3001/api' : '/api'
+)
+
+if (!import.meta.env.DEV && !import.meta.env.VITE_API_BASE_URL) {
+  console.warn('[HabitMind] VITE_API_BASE_URL is not set. API calls may fail in production.')
+}
 
 const api = axios.create({
   baseURL: API_BASE_URL,

@@ -58,19 +58,25 @@ app.use(compression())
 // HTTP Parameter Pollution protection
 app.use(hpp())
 
-// CORS — lock to specific origin
-const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:5173'
-]
+// CORS — lock to specific origin(s)
+// Supports comma-separated FRONTEND_URL for multiple origins
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
+  .split(',')
+  .map(url => url.trim())
+  .filter(Boolean)
+
+console.log('[CORS] Allowed origins:', allowedOrigins)
+
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, etc. in dev)
+    // Allow requests with no origin (mobile apps, curl, server-to-server) in dev only
     if (!origin && process.env.NODE_ENV !== 'production') {
       return callback(null, true)
     }
     if (allowedOrigins.includes(origin)) {
       return callback(null, true)
     }
+    console.warn(`[CORS] Blocked request from origin: ${origin}`)
     return callback(new Error('Not allowed by CORS'))
   },
   credentials: true
