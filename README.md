@@ -4,6 +4,8 @@
 
 ---
 
+**Live demo → [habitmind-xi.vercel.app](https://habitmind-xi.vercel.app/)**
+
 ## ✨ Features
 
 *   **Premium Glassmorphic UI**: Vibrant, responsive dark-mode layout styled with curated color palettes, elegant gradients, Outfit typography, and custom micro-animations.
@@ -120,4 +122,4 @@ habitmind/
 
 ---
 
-*Designed and engineered by Thejus.*
+Built by [Thejus](https://github.com/thejusdev)
